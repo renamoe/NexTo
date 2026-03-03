@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # 数据库：PostGIS (支持地理空间的 PostgreSQL)
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: map_db
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: map_schedule
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./docker/data/postgres:/var/lib/postgresql/data
+
+  # 缓存：Redis (用于消息推送和坐标缓存)
+  redis:
+    image: redis:7-alpine
+    container_name: map_redis
+    ports:
+      - "6379:6379"
+
+  # 后端：FastAPI (开发模式)
+  backend:
+    build: ./backend
+    container_name: map_backend
+    volumes:
+      - ./backend:/code
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@db/map_schedule
+    depends_on:
+      - db
+      - redis
