@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Node
+node_modules/
+dist/
+.eslintcache
+
+# Docker & DB
+docker/data/
+
+# IDE
+.vscode/
+.idea/
+
+# MacOS
+.DS_Store
