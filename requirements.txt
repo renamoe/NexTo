@@ -1,0 +1,24 @@
+# 核心框架
+fastapi
+uvicorn[standard]
+pydantic[email]
+pydantic-settings
+
+# 数据库 & 异步驱动
+sqlalchemy[asyncio]
+asyncpg
+# 地理空间扩展：用于 SQLAlchemy 处理 PostGIS 数据类型
+GeoAlchemy2
+
+# 异步任务 & 缓存
+celery
+redis
+
+# 认证与安全
+python-jose[cryptography]
+passlib[bcrypt]
+
+# 工具类
+python-multipart
+requests
+python-dateutil
