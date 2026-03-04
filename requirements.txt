@@ -17,6 +17,7 @@ redis
 # 认证与安全
 python-jose[cryptography]
 passlib[bcrypt]
+argon2-cffi
 
 # 工具类
 python-multipart

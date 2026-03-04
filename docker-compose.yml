@@ -31,7 +31,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://user:password@db/map_schedule
+      - DATABASE_URL=postgresql+asyncpg://user:password@db/map_schedule
     depends_on:
       - db
       - redis
