@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   # 数据库：PostGIS (支持地理空间的 PostgreSQL)
@@ -14,6 +14,11 @@ services:
       - "5432:5432"
     volumes:
       - ./docker/data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d map_schedule"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # 缓存：Redis (用于消息推送和坐标缓存)
   redis:
@@ -33,5 +38,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://user:password@db/map_schedule
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
