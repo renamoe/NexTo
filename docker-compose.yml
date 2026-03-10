@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 networks:
   nexto_net:
@@ -18,8 +18,11 @@ services:
       - "5432:5432"
     volumes:
       - ./docker/data/postgres:/var/lib/postgresql/data
-    networks:
-      - nexto_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d map_schedule"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # 缓存：Redis (用于消息推送和坐标缓存)
   redis:
@@ -39,7 +42,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://user:password@db/map_schedule
+      - DATABASE_URL=postgresql+asyncpg://user:password@db/map_schedule
     depends_on:
       - db
       - redis
@@ -57,3 +60,7 @@ services:
       - backend
     networks:
       - nexto_net
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
