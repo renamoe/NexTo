@@ -1,0 +1,20 @@
+# Git
+.git
+.gitignore
+
+# macOS
+.DS_Store
+
+# Node (如将来引入构建工具)
+node_modules
+dist
+.npm
+
+# Docker 自身文件（不需打入镜像）
+Dockerfile
+.dockerignore
+
+# 编辑器
+.vscode
+.idea
+*.swp

@@ -1,5 +1,9 @@
 version: "3.8"
 
+networks:
+  nexto_net:
+    driver: bridge
+
 services:
   # 数据库：PostGIS (支持地理空间的 PostgreSQL)
   db:
@@ -26,6 +30,8 @@ services:
     container_name: map_redis
     ports:
       - "6379:6379"
+    networks:
+      - nexto_net
 
   # 后端：FastAPI (开发模式)
   backend:
@@ -38,6 +44,22 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://user:password@db/map_schedule
     depends_on:
+      - db
+      - redis
+    networks:
+      - nexto_net
+
+  # 前端：纯静态 Bootstrap + AMap，由 Nginx 托管
+  frontend:
+    build: ./frontend
+    container_name: map_frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - nexto_net
       db:
         condition: service_healthy
       redis:
