@@ -1,4 +1,3 @@
-version: "3.8"
 
 networks:
   nexto_net:
@@ -22,7 +21,9 @@ services:
       test: ["CMD-SHELL", "pg_isready -U user -d map_schedule"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+    networks:
+      - nexto_net
 
   # 缓存：Redis (用于消息推送和坐标缓存)
   redis:
@@ -44,8 +45,15 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://user:password@db/map_schedule
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - nexto_net
 
@@ -57,10 +65,11 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - backend
-    networks:
-      - nexto_net
+      backend:
+        condition: service_healthy
       db:
         condition: service_healthy
       redis:
         condition: service_started
+    networks:
+      - nexto_net

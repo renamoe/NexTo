@@ -25,6 +25,13 @@ RUN printf 'server {\n\
         try_files $uri $uri/ /index.html;\n\
     }\n\
 \n\
+    # 代理后端 API 请求\n\
+    location /api/ {\n\
+        proxy_pass http://backend:8000/;\n\
+        proxy_set_header Host $host;\n\
+        proxy_set_header X-Real-IP $remote_addr;\n\
+    }\n\
+\n\
     # 静态资源长缓存\n\
     location ~* \\.(css|js|png|jpg|svg|ico|woff2?)$ {\n\
         expires 7d;\n\

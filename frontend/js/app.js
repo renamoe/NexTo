@@ -48,18 +48,77 @@ function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
-/** 从 localStorage 读取日程列表 */
+/** 从本地缓存读取日程列表（同步，供页面各处渲染使用） */
+let _currentSchedules = [];
 function loadSchedules() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-  } catch {
-    return [];
-  }
+  return _currentSchedules;
 }
 
-/** 保存日程列表到 localStorage */
+/** 仅用于本地更新状态，不再写入 localStorage */
 function saveSchedules(list) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+  _currentSchedules = list;
+}
+
+/** 从后端同步日程 */
+async function fetchSchedules() {
+  if (!window.AuthAPI || !window.AuthAPI.isLoggedIn()) {
+    _currentSchedules = [];
+    return;
+  }
+  try {
+    const end = new Date();
+    end.setFullYear(end.getFullYear() + 2); // 取未来两年
+    const start = new Date();
+    start.setMonth(start.getMonth() - 6);   // 取过去半年
+
+    const res = await window.ScheduleAPI.list(start.toISOString(), end.toISOString());
+    // 清空现有的 Markers
+    _currentSchedules.forEach(s => {
+      if (typeof removeMarkerFromMap === 'function') removeMarkerFromMap(s.id);
+    });
+
+    // 映射后端字段到前端需要的字段
+    _currentSchedules = res.schedules.map(b => {
+      // 尝试解析存入 description 中的附加 JSON 配置
+      let meta = {};
+      let desc = b.description || '';
+      try {
+        if (desc.startsWith('###META###')) {
+          const parts = desc.split('\\n');
+          meta = JSON.parse(parts[0].replace('###META###', ''));
+          desc = parts.slice(1).join('\\n');
+        }
+      } catch (e) {}
+
+      return {
+        id: b.id !== undefined ? b.id : b.schedule_id,
+        title: b.title,
+        time: b.start_time ? b.start_time.split('.')[0].slice(0, 16) : '',
+        lng: b.lng,
+        lat: b.lat,
+        location: b.location_name,
+        amap_poi_id: b.amap_poi_id || '',
+        note: desc,
+        color: meta.color || '#4285F4',
+        remindBefore: meta.remindBefore || 15,
+        remindBrowser: meta.remindBrowser !== undefined ? meta.remindBrowser : true,
+        remindSound: meta.remindSound || false,
+        smartRemind: meta.smartRemind || false,
+        travelMode: meta.travelMode || 'driving',
+        createdAt: b.start_time
+      };
+    });
+
+    // 重新添加 Markers 到地图并刷新列表
+    _currentSchedules.forEach(s => {
+      if (typeof addMarkerToMap === 'function') addMarkerToMap(s);
+    });
+    if (typeof renderList === 'function') renderList();
+    if (typeof updateTodayBadge === 'function') updateTodayBadge();
+
+  } catch (err) {
+    console.warn('获取日程失败 =', err.message);
+  }
 }
 
 /** 格式化时间显示 */
@@ -1004,20 +1063,33 @@ document.getElementById('editScheduleBtn').addEventListener('click', () => {
 });
 
 // ===== 详情弹窗里的"删除"按钮 =====
-document.getElementById('deleteScheduleBtn').addEventListener('click', () => {
+document.getElementById('deleteScheduleBtn').addEventListener('click', async () => {
   if (!currentDetailId) return;
   if (!confirm('确认删除此日程？')) return;
 
-  let schedules = loadSchedules();
-  schedules = schedules.filter(s => s.id !== currentDetailId);
-  saveSchedules(schedules);
+  const btn = document.getElementById('deleteScheduleBtn');
+  const oldHtml = btn.innerHTML;
 
-  removeMarkerFromMap(currentDetailId);
-  renderList();
-  updateTodayBadge();
+  try {
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    btn.disabled = true;
 
-  bootstrap.Modal.getInstance(document.getElementById('detailModal')).hide();
-  showToast('日程已删除', 'success');
+    await window.ScheduleAPI.delete(currentDetailId);
+    await fetchSchedules();
+
+    btn.innerHTML = oldHtml;
+    btn.disabled = false;
+
+    renderList();
+    updateTodayBadge();
+
+    bootstrap.Modal.getInstance(document.getElementById('detailModal')).hide();
+    showToast('日程已删除', 'success');
+  } catch (err) {
+    btn.innerHTML = oldHtml;
+    btn.disabled = false;
+    showToast('删除失败: ' + err.message, 'danger');
+  }
 });
 
 // ===== 详情弹窗里的"路况"按钮 =====
@@ -1030,7 +1102,7 @@ document.getElementById('navScheduleBtn').addEventListener('click', () => {
 // =====================================================
 //  保存日程（新增 / 编辑）
 // =====================================================
-document.getElementById('saveScheduleBtn').addEventListener('click', () => {
+document.getElementById('saveScheduleBtn').addEventListener('click', async () => {
   const title = document.getElementById('scheduleTitle').value.trim();
   const time = document.getElementById('scheduleTime').value;
   const lng = parseFloat(document.getElementById('editLng').value);
@@ -1049,54 +1121,69 @@ document.getElementById('saveScheduleBtn').addEventListener('click', () => {
     return;
   }
 
-  const id = document.getElementById('editId').value || genId();
-  const isEdit = !!document.getElementById('editId').value;
+  const id = document.getElementById('editId').value;
+  const isEdit = !!id;
 
-  const schedule = {
-    id,
-    title,
-    location: document.getElementById('scheduleLocation').value.trim(),
-    lng,
-    lat,
-    time,               // 格式: "YYYY-MM-DDTHH:mm"
-    note: document.getElementById('scheduleNote').value.trim(),
+  const originalMeta = {
     color: document.getElementById('scheduleColor').value || '#4285F4',
     remindBefore: parseInt(document.getElementById('remindBefore').value) || 0,
     remindBrowser: document.getElementById('remindBrowser').checked,
     remindSound: document.getElementById('remindSound').checked,
     smartRemind: document.getElementById('smartRemind').checked,
-    travelMode: document.querySelector('input[name="travelMode"]:checked')?.value || 'driving',
-    createdAt: isEdit ? undefined : new Date().toISOString(),
+    travelMode: document.querySelector('input[name="travelMode"]:checked')?.value || 'driving'
   };
 
-  // 保存
-  let schedules = loadSchedules();
-  if (isEdit) {
-    const idx = schedules.findIndex(s => s.id === id);
-    if (idx >= 0) {
-      schedule.createdAt = schedules[idx].createdAt;
-      schedules[idx] = schedule;
+  const rawNote = document.getElementById('scheduleNote').value.trim();
+  const description = `###META###${JSON.stringify(originalMeta)}\\n${rawNote}`;
+
+  // time 格式为 "YYYY-MM-DDTHH:mm"，后端要求 ISO 格式
+  const isoTime = time + ':00';
+
+  const scheduleData = {
+    title,
+    location_name: document.getElementById('scheduleLocation').value.trim() || '未命名位置',
+    lng,
+    lat,
+    start_time: isoTime,
+    end_time: isoTime, // 前端暂无结束时间输入，同步起点
+    description: description,
+    amap_poi_id: ''
+  };
+
+  const btn = document.getElementById('saveScheduleBtn');
+  const oldHtml = btn.innerHTML;
+
+  try {
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 保存中...';
+    btn.disabled = true;
+
+    if (isEdit) {
+      scheduleData.id = parseInt(id) || id;
+      await window.ScheduleAPI.update(scheduleData);
+    } else {
+      await window.ScheduleAPI.create(scheduleData);
     }
-    // 刷新地图上的 Marker 颜色
-    refreshMarkerColor(schedule);
-  } else {
-    // 移除已提醒记录（新日程）
-    remindedSet.delete(id);
-    schedules.push(schedule);
-    addMarkerToMap(schedule);
-  }
 
-  saveSchedules(schedules);
-  renderList();
-  updateTodayBadge();
+    await fetchSchedules(); // 从后端刷新整体列表及 Marker
+    
+    btn.innerHTML = oldHtml;
+    btn.disabled = false;
 
-  bootstrap.Modal.getInstance(document.getElementById('scheduleModal')).hide();
-  showToast(isEdit ? '日程已更新 ✓' : '日程已添加 ✓', 'success');
+    renderList();
+    updateTodayBadge();
 
-  // 飞到新位置
-  if (mapInstance) {
-    mapInstance.setCenter([lng, lat]);
-    mapInstance.setZoom(15);
+    bootstrap.Modal.getInstance(document.getElementById('scheduleModal')).hide();
+    showToast(isEdit ? '日程已更新 ✓' : '日程已添加 ✓', 'success');
+
+    // 飞到新位置
+    if (mapInstance && typeof mapInstance.setCenter === 'function') {
+      mapInstance.setCenter([lng, lat]);
+      mapInstance.setZoom(15);
+    }
+  } catch (err) {
+    btn.innerHTML = oldHtml;
+    btn.disabled = false;
+    showToast('保存失败: ' + err.message, 'danger');
   }
 });
 
@@ -1468,6 +1555,108 @@ document.getElementById('rpModeBar').addEventListener('click', e => {
 });
 
 // =====================================================
+//  账号验证相关逻辑 (authArea & authModal)
+// =====================================================
+function checkAuthStatus() {
+  const isAuth = window.AuthAPI && window.AuthAPI.isLoggedIn();
+  const loginBtn = document.getElementById('loginBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
+  const userNameDisplay = document.getElementById('userNameDisplay');
+
+  if (isAuth) {
+    loginBtn.classList.add('d-none');
+    logoutBtn.classList.remove('d-none');
+    // 解码 jwt 取用户名，或只显示 已登录
+    let username = '已登录';
+    try {
+      const token = localStorage.getItem('nexto_token');
+      if (token) {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        if (payload.sub) username = payload.sub;
+      }
+    } catch(e) {}
+    userNameDisplay.textContent = username;
+    userNameDisplay.classList.remove('d-none');
+  } else {
+    loginBtn.classList.remove('d-none');
+    logoutBtn.classList.add('d-none');
+    userNameDisplay.classList.add('d-none');
+  }
+}
+
+document.getElementById('loginBtn').addEventListener('click', e => {
+  e.preventDefault();
+  new bootstrap.Modal(document.getElementById('authModal')).show();
+});
+
+document.getElementById('logoutBtn').addEventListener('click', async e => {
+  e.preventDefault();
+  if (!confirm('确认注销吗？')) return;
+  try {
+    await window.AuthAPI.logout();
+    checkAuthStatus();
+    _currentSchedules.forEach(s => removeMarkerFromMap(s.id));
+    _currentSchedules = [];
+    renderList();
+    updateTodayBadge();
+    showToast('已注销', 'info');
+  } catch (err) {
+    showToast('注销失败: ' + err.message, 'warning');
+  }
+});
+
+document.getElementById('doLoginBtn').addEventListener('click', async () => {
+  const user = document.getElementById('loginUsername').value.trim();
+  const pass = document.getElementById('loginPassword').value.trim();
+  if (!user || !pass) return showToast('用户名和密码不能为空', 'warning');
+
+  const btn = document.getElementById('doLoginBtn');
+  const oldText = btn.textContent;
+  btn.textContent = '登录中...';
+  btn.disabled = true;
+
+  try {
+    await window.AuthAPI.login(user, pass);
+    bootstrap.Modal.getInstance(document.getElementById('authModal')).hide();
+    showToast('登录成功', 'success');
+    checkAuthStatus();
+    await fetchSchedules(); // fetch from server as soon as valid login
+  } catch (err) {
+    showToast('登录失败: ' + err.message, 'danger');
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('doRegisterBtn').addEventListener('click', async () => {
+  const email = document.getElementById('regEmail').value.trim();
+  const user = document.getElementById('regUsername').value.trim();
+  const pass = document.getElementById('regPassword').value.trim();
+  if (!user || !pass || !email) return showToast('注册信息填写不完整', 'warning');
+
+  const btn = document.getElementById('doRegisterBtn');
+  const oldText = btn.textContent;
+  btn.textContent = '注册中...';
+  btn.disabled = true;
+
+  try {
+    await window.AuthAPI.register(user, pass, email);
+    showToast('注册成功，请切换到登录页面进行登录', 'success');
+    document.getElementById('login-tab').click();
+    document.getElementById('loginUsername').value = user;
+    document.getElementById('loginPassword').value = '';
+  } catch (err) {
+    showToast('注册失败: ' + err.message, 'danger');
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
+});
+
+// =====================================================
 //  启动
 // =====================================================
+checkAuthStatus();
 initMap();
+
